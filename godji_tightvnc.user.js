@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — TightVNC
 // @namespace    http://tampermonkey.net/
-// @version      3.0
+// @version      3.1
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @exclude      https://godji.cloud/tv/*
@@ -278,24 +278,11 @@ function connectPC(name, cell){
 }
 
 // ── Кнопка в сайдбаре ────────────────────────────────────
-function getClockSection(){
-    var navbar = document.querySelector('nav.mantine-AppShell-navbar');
-    if(!navbar) return null;
-    var sections = navbar.querySelectorAll(':scope > .mantine-AppShell-section');
-    for(var i = 0; i < sections.length; i++){
-        var s = sections[i];
-        if(!s.classList.contains('Sidebar_footer__1BA98') &&
-           !s.classList.contains('Sidebar_links__o1FyV') &&
-           !s.classList.contains('Sidebar_header__dm6Ua') &&
-           (s.querySelector('.Shifts_shiftsPaper__9Jml_') || s.textContent.match(/\d{2}:\d{2}/))){
-            return s;
-        }
-    }
-    return null;
-}
-
 function createSidebarBtn(){
     if(document.getElementById('gj-vnc-sidebar-btn')) return;
+    // Только на страницах с сайдбаром
+    var inner = document.querySelector('.Sidebar_linksInner__oTy_4');
+    if(!inner) return;
 
     var nativeLink = document.querySelector('a[href="/bookings"]') ||
                      document.querySelector('a.mantine-NavLink-root');
@@ -304,9 +291,8 @@ function createSidebarBtn(){
 
     var btn = document.createElement('a');
     btn.id = 'gj-vnc-sidebar-btn';
-    btn.className = cls;
+    btn.className = cls; // только классы, никакого style
     btn.href = 'javascript:void(0)';
-    btn.style.cssText = 'display:flex;align-items:center;gap:12px;width:100%;height:46px;padding:8px 12px 8px 18px;cursor:pointer;user-select:none;font-family:inherit;box-sizing:border-box;text-decoration:none;';
 
     var sec = document.createElement('span');
     sec.className = 'm_690090b5 mantine-NavLink-section';
@@ -315,7 +301,7 @@ function createSidebarBtn(){
     icoWrap.className = 'LinksGroup_themeIcon__E9SRO m_7341320d mantine-ThemeIcon-root';
     icoWrap.setAttribute('data-variant','filled');
     icoWrap.style.cssText = '--ti-size:calc(1.875rem * var(--mantine-scale));--ti-bg:var(--mantine-color-gg_primary-filled,#cc0001);--ti-color:var(--mantine-color-white);--ti-bd:calc(0.0625rem * var(--mantine-scale)) solid transparent;';
-    icoWrap.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+    icoWrap.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
     sec.appendChild(icoWrap);
 
     var body = document.createElement('div');
@@ -325,25 +311,13 @@ function createSidebarBtn(){
     lbl.textContent = 'Просмотр экрана';
     body.appendChild(lbl);
     btn.appendChild(sec); btn.appendChild(body);
+    btn.addEventListener('click', function(e){ e.stopPropagation(); togglePopup(btn); });
 
-    btn.addEventListener('click', function(e){
-        e.stopPropagation();
-        togglePopup(btn);
-    });
-
-    // Вставляем под Поиск клиента (godji-search-btn), иначе перед блоком часов
-    var searchBtn = document.getElementById('godji-search-btn');
-    if(searchBtn && searchBtn.parentNode){
-        var next = searchBtn.nextSibling;
-        if(next) searchBtn.parentNode.insertBefore(btn, next);
-        else searchBtn.parentNode.appendChild(btn);
-        return;
-    }
-    // Фоллбэк — перед блоком часов в navbar
-    var clockSec = getClockSection();
-    if(clockSec && clockSec.parentNode){
-        clockSec.parentNode.insertBefore(btn, clockSec);
-    }
+    // После godji-search-btn в linksInner, иначе в конец
+    var searchBtn = inner.querySelector('#godji-search-btn');
+    if(searchBtn && searchBtn.nextSibling) inner.insertBefore(btn, searchBtn.nextSibling);
+    else if(searchBtn) inner.appendChild(btn);
+    else inner.appendChild(btn);
 }
 
 function updateSidebarBtn(open){
@@ -353,12 +327,42 @@ function updateSidebarBtn(open){
     else btn.removeAttribute('data-active');
 }
 
+// ── Кнопка просмотра в карточке ПК на дашборде ───────────
+// Перехватываем клик по строке таблицы с ПК и добавляем кнопку
+function hookPcCards(){
+    // Ищем открытую модалку/панель ПК
+    var observer = new MutationObserver(function(){
+        // Ищем панель клиента или модалку с информацией о ПК
+        var pcPanels = document.querySelectorAll('[class*="DeviceCard"],[class*="deviceCard"],[class*="device-card"]');
+        pcPanels.forEach(function(panel){
+            if(panel._vncHooked) return;
+            panel._vncHooked = true;
+            // Определяем номер ПК
+            var nameEl = panel.querySelector('[class*="name"],[class*="Name"],[class*="title"]');
+            var pcName = nameEl ? nameEl.textContent.trim() : null;
+            if(!pcName) return;
+            addVncButtonToCard(panel, pcName);
+        });
+    });
+    observer.observe(document.body, {childList:true, subtree:true});
+}
+
+function addVncButtonToCard(panel, pcName){
+    if(panel.querySelector('.gj-vnc-card-btn')) return;
+    var btn = document.createElement('button');
+    btn.className = 'gj-vnc-card-btn';
+    btn.style.cssText = 'background:var(--mantine-color-gg_primary-filled,#cc0001);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;white-space:nowrap;';
+    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>Просмотр';
+    btn.addEventListener('click', function(e){
+        e.stopPropagation();
+        connectPC(pcName, btn);
+    });
+    panel.appendChild(btn);
+}
+
 // ── Init ──────────────────────────────────────────────────
 function tryInit(){
-    // Ждём navbar
-    if(!document.querySelector('nav.mantine-AppShell-navbar')){
-        setTimeout(tryInit, 500); return;
-    }
+    if(!document.querySelector('.Sidebar_linksInner__oTy_4')){ setTimeout(tryInit,500); return; }
     createSidebarBtn();
 }
 
@@ -369,5 +373,6 @@ new MutationObserver(function(){
 setTimeout(tryInit, 1000);
 setTimeout(tryInit, 2500);
 setTimeout(tryInit, 5000);
+hookPcCards();
 
 })();
