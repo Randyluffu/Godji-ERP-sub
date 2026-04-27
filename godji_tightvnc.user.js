@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Годжи — TightVNC
 // @namespace    http://tampermonkey.net/
-// @version      3.1
+// @version      3.2
 // @match        https://godji.cloud/*
 // @match        https://*.godji.cloud/*
 // @exclude      https://godji.cloud/tv/*
@@ -278,11 +278,26 @@ function connectPC(name, cell){
 }
 
 // ── Кнопка в сайдбаре ────────────────────────────────────
+function getLastNativeVNC(inner){
+    var all = Array.from(inner.querySelectorAll(':scope > a.mantine-NavLink-root'));
+    var natives = all.filter(function(a){ return !a.id || (!a.id.startsWith('godji') && !a.id.startsWith('gj-')); });
+    return natives.length ? natives[natives.length-1] : null;
+}
+
 function createSidebarBtn(){
-    if(document.getElementById('gj-vnc-sidebar-btn')) return;
-    // Только на страницах с сайдбаром
     var inner = document.querySelector('.Sidebar_linksInner__oTy_4');
     if(!inner) return;
+
+    var existing = document.getElementById('gj-vnc-sidebar-btn');
+    if(existing){
+        // Должна быть сразу после последней нативной
+        var last2 = getLastNativeVNC(inner);
+        if(last2 && last2.nextSibling !== existing){
+            if(last2.nextSibling) inner.insertBefore(existing, last2.nextSibling);
+            else inner.appendChild(existing);
+        }
+        return;
+    }
 
     var nativeLink = document.querySelector('a[href="/bookings"]') ||
                      document.querySelector('a.mantine-NavLink-root');
@@ -291,7 +306,7 @@ function createSidebarBtn(){
 
     var btn = document.createElement('a');
     btn.id = 'gj-vnc-sidebar-btn';
-    btn.className = cls; // только классы, никакого style
+    btn.className = cls;
     btn.href = 'javascript:void(0)';
 
     var sec = document.createElement('span');
@@ -313,10 +328,9 @@ function createSidebarBtn(){
     btn.appendChild(sec); btn.appendChild(body);
     btn.addEventListener('click', function(e){ e.stopPropagation(); togglePopup(btn); });
 
-    // После godji-search-btn в linksInner, иначе в конец
-    var searchBtn = inner.querySelector('#godji-search-btn');
-    if(searchBtn && searchBtn.nextSibling) inner.insertBefore(btn, searchBtn.nextSibling);
-    else if(searchBtn) inner.appendChild(btn);
+    // После последней нативной кнопки (godji-search-btn — fixed в body, не в linksInner)
+    var last = getLastNativeVNC(inner);
+    if(last && last.nextSibling) inner.insertBefore(btn, last.nextSibling);
     else inner.appendChild(btn);
 }
 
@@ -328,16 +342,12 @@ function updateSidebarBtn(open){
 }
 
 // ── Кнопка просмотра в карточке ПК на дашборде ───────────
-// Перехватываем клик по строке таблицы с ПК и добавляем кнопку
 function hookPcCards(){
-    // Ищем открытую модалку/панель ПК
     var observer = new MutationObserver(function(){
-        // Ищем панель клиента или модалку с информацией о ПК
         var pcPanels = document.querySelectorAll('[class*="DeviceCard"],[class*="deviceCard"],[class*="device-card"]');
         pcPanels.forEach(function(panel){
             if(panel._vncHooked) return;
             panel._vncHooked = true;
-            // Определяем номер ПК
             var nameEl = panel.querySelector('[class*="name"],[class*="Name"],[class*="title"]');
             var pcName = nameEl ? nameEl.textContent.trim() : null;
             if(!pcName) return;
@@ -353,20 +363,27 @@ function addVncButtonToCard(panel, pcName){
     btn.className = 'gj-vnc-card-btn';
     btn.style.cssText = 'background:var(--mantine-color-gg_primary-filled,#cc0001);color:#fff;border:none;border-radius:6px;padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px;white-space:nowrap;';
     btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>Просмотр';
-    btn.addEventListener('click', function(e){
-        e.stopPropagation();
-        connectPC(pcName, btn);
-    });
+    btn.addEventListener('click', function(e){ e.stopPropagation(); connectPC(pcName, btn); });
     panel.appendChild(btn);
 }
 
 // ── Init ──────────────────────────────────────────────────
+var _vncInnerObs = new MutationObserver(function(){ createSidebarBtn(); });
+function watchVncInner(){
+    var inner = document.querySelector('.Sidebar_linksInner__oTy_4');
+    if(inner && !inner._vncWatched){ inner._vncWatched=true; _vncInnerObs.observe(inner,{childList:true}); }
+}
+watchVncInner();
+
 function tryInit(){
-    if(!document.querySelector('.Sidebar_linksInner__oTy_4')){ setTimeout(tryInit,500); return; }
+    var inner = document.querySelector('.Sidebar_linksInner__oTy_4');
+    if(!inner){ setTimeout(tryInit,500); return; }
+    watchVncInner();
     createSidebarBtn();
 }
 
 new MutationObserver(function(){
+    watchVncInner();
     if(!document.getElementById('gj-vnc-sidebar-btn')) createSidebarBtn();
 }).observe(document.body || document.documentElement, {childList:true, subtree:false});
 
